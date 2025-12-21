@@ -57,9 +57,9 @@ jobs:
       - name: SAM Deploy
         run: |
           if [ "${{ github.event.inputs.environment }}" == "prod" ]; then
-            sam deploy --config-env prod --no-confirm-changeset --resolve-image-repos
+            sam deploy --config-env prod --no-confirm-changeset --resolve-image-repos --resolve-s3
           else
-            sam deploy --config-env dev --no-confirm-changeset --resolve-image-repos
+            sam deploy --config-env dev --no-confirm-changeset --resolve-image-repos --resolve-s3
           fi
 
       - name: Get Stack Outputs
