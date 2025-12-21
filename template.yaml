@@ -3,11 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: MCP Gateway - Lightweight serverless proxy for MCP server governance
 
 Parameters:
-  Environment:
-    Type: String
-    Default: dev
-    AllowedValues: [dev, staging, prod]
-  
   AllowedServersJson:
     Type: String
     Description: JSON object mapping server names to URLs
@@ -22,7 +17,7 @@ Resources:
   McpGatewayFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub mcp-gateway-${Environment}
+      FunctionName: mcp-gateway
       PackageType: Image
       Architectures:
         - arm64
@@ -54,7 +49,7 @@ Resources:
   McpGatewayApi:
     Type: AWS::Serverless::HttpApi
     Properties:
-      StageName: !Ref Environment
+      StageName: prod
       CorsConfiguration:
         AllowOrigins:
           - "*"
@@ -69,7 +64,7 @@ Resources:
   McpGatewayLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/mcp-gateway-${Environment}
+      LogGroupName: /aws/lambda/mcp-gateway
       RetentionInDays: 30
 
   # Optional: Metric filter for audit trail
@@ -91,8 +86,8 @@ Resources:
 Outputs:
   McpGatewayUrl:
     Description: MCP Gateway endpoint URL
-    Value: !Sub "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
-  
+    Value: !Sub "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
   McpRegistryExample:
     Description: Example registry entry pointing to this gateway
     Value: !Sub |
@@ -103,7 +98,7 @@ Outputs:
           "version": "1.0.0",
           "remotes": [{
             "type": "streamable-http",
-            "url": "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/mcp/your-server"
+            "url": "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/prod/mcp/your-server"
           }]
         }
       }
