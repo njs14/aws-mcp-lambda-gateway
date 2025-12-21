@@ -1,5 +1,12 @@
 name: AWS STS Assume Role
 
+# ⚠️ SECURITY WARNING: This workflow uses long-lived AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
+# This approach is NOT RECOMMENDED for production use.
+# 
+# RECOMMENDED: Use GitHub OIDC (OpenID Connect) authentication instead, as implemented in deploy.yml.
+# OIDC provides temporary credentials without storing long-lived secrets.
+# See: https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services
+
 on:
   workflow_call:
     inputs:

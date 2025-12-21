@@ -3,18 +3,24 @@
 
 version = 0.1
 
-[default.deploy.parameters]
+[default.global.parameters]
 stack_name = "mcp-gateway"
 resolve_s3 = true
+resolve_image_repos = true
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "mcp-gateway"
 s3_prefix = "mcp-gateway"
 region = "us-east-1"
-confirm_changeset = true
-capabilities = "CAPABILITY_IAM"
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+confirm_changeset = false
+fail_on_empty_changeset = false
 resolve_image_repos = true
 parameter_overrides = [
     # Add your allowed servers here
     "AllowedServersJson={\"context7\":\"https://mcp.context7.com/mcp\",\"notion\":\"https://mcp.notion.com/mcp\"}"
 ]
-
-[default.build.parameters]
-use_container = false

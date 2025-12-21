@@ -1,251 +1,149 @@
 """
-MCP Gateway - Lightweight proxy for MCP server governance.
+MCP Gateway - Proxy with Cognito JWT auth and audit logging.
 
-Features:
-- Allowlist enforcement for MCP servers
-- Audit logging to CloudWatch
-- Request/response streaming support
-- Header passthrough with optional injection
+Routes: /mcp/{server_name}/{path:path}
+Auth: Cognito JWT (RS256)
 """
 
 import json
 import os
+import re
 import time
 from typing import Optional
-from contextlib import asynccontextmanager
+from urllib.parse import unquote
 
-from fastapi import FastAPI, Request, HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
+from jose import jwt, JWTError
 
-# Load configuration
-def load_allowed_servers() -> dict:
-    """Load allowed servers from environment variable."""
-    raw = os.environ.get("ALLOWED_SERVERS", "{}")
-    try:
-        servers = json.loads(raw)
-        print(f"Loaded {len(servers)} allowed servers: {list(servers.keys())}")
-        return servers
-    except json.JSONDecodeError as e:
-        print(f"ERROR: Failed to parse ALLOWED_SERVERS: {e}")
-        return {}
+# Config
+ALLOWED_SERVERS: dict = json.loads(os.environ.get("ALLOWED_SERVERS", "{}"))
+COGNITO_ISSUER = os.environ.get("COGNITO_ISSUER", "")
+COGNITO_AUDIENCE = os.environ.get("COGNITO_AUDIENCE", "")
+JWKS_URL = f"{COGNITO_ISSUER}/.well-known/jwks.json"
 
-ALLOWED_SERVERS = load_allowed_servers()
+STRIP_REQUEST_HEADERS = {"host", "x-forwarded-for", "x-forwarded-proto", "x-amzn-trace-id", "authorization"}
+STRIP_RESPONSE_HEADERS = {"transfer-encoding", "connection", "keep-alive"}
 
-# Headers to strip from proxied requests (security)
-STRIP_REQUEST_HEADERS = {
-    "host",
-    "x-forwarded-for",
-    "x-forwarded-proto",
-    "x-forwarded-port",
-    "x-amzn-trace-id",
-    "x-amz-cf-id",
-}
+app = FastAPI(title="MCP Gateway", docs_url=None, redoc_url=None)
+security = HTTPBearer(auto_error=False)
 
-# Headers to strip from responses
-STRIP_RESPONSE_HEADERS = {
-    "transfer-encoding",
-    "connection",
-    "keep-alive",
-}
+_jwks_cache: dict = {}
+_jwks_fetched_at: float = 0
 
 
-def log_audit(
-    event_type: str,
-    server: str,
-    path: str,
-    method: str,
-    status: int,
-    latency_ms: float,
-    user: Optional[str] = None,
-    error: Optional[str] = None,
-):
-    """Structured audit log for CloudWatch Logs Insights queries."""
-    log_entry = {
-        "event": event_type,
-        "server": server,
-        "path": path,
-        "method": method,
-        "status": status,
-        "latency_ms": round(latency_ms, 2),
-        "user": user or "anonymous",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    if error:
-        log_entry["error"] = error
+def log_audit(event: str, **kwargs):
+    print(json.dumps({"event": event, "ts": time.time(), **kwargs}))
+
+
+async def get_jwks() -> dict:
+    global _jwks_cache, _jwks_fetched_at
+    if time.time() - _jwks_fetched_at < 3600 and _jwks_cache:
+        return _jwks_cache
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(JWKS_URL, timeout=5)
+        resp.raise_for_status()
+        _jwks_cache = resp.json()
+        _jwks_fetched_at = time.time()
+    return _jwks_cache
+
+
+def get_signing_key(token: str, jwks: dict) -> dict:
+    unverified_header = jwt.get_unverified_header(token)
+    kid = unverified_header.get("kid")
+    for key in jwks.get("keys", []):
+        if key.get("kid") == kid:
+            return key
+    raise JWTError(f"Key {kid} not found in JWKS")
+
+
+async def validate_jwt(creds: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+    if not creds:
+        log_audit("auth_failure", reason="missing_token")
+        raise HTTPException(401, "Missing authorization header")
     
-    # Print as JSON for CloudWatch structured logging
-    print(json.dumps(log_entry))
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
-    print("MCP Gateway starting up...")
-    print(f"Configured servers: {list(ALLOWED_SERVERS.keys())}")
-    yield
-    print("MCP Gateway shutting down...")
-
-
-app = FastAPI(
-    title="MCP Gateway",
-    description="Governance proxy for MCP servers",
-    lifespan=lifespan,
-)
+    token = creds.credentials
+    try:
+        jwks = await get_jwks()
+        signing_key = get_signing_key(token, jwks)
+        
+        # Cognito access tokens use client_id claim, not aud
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            issuer=COGNITO_ISSUER,
+            options={"require_exp": True, "verify_aud": False}
+        )
+        
+        # Cognito puts client_id in the token, verify it
+        if claims.get("client_id") != COGNITO_AUDIENCE and claims.get("aud") != COGNITO_AUDIENCE:
+            raise JWTError("Invalid audience/client_id")
+        
+        return claims
+    except JWTError as e:
+        log_audit("auth_failure", reason="invalid_token", error=str(e))
+        raise HTTPException(401, f"Invalid token: {e}")
+    except httpx.HTTPError as e:
+        log_audit("auth_failure", reason="jwks_fetch_failed", error=str(e))
+        raise HTTPException(503, "Unable to validate token")
 
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "servers": list(ALLOWED_SERVERS.keys()),
-    }
-
-
-@app.get("/servers")
-async def list_servers():
-    """List allowed MCP servers (for debugging/discovery)."""
-    return {
-        "servers": [
-            {"name": name, "url": url}
-            for name, url in ALLOWED_SERVERS.items()
-        ]
-    }
+    return {"status": "ok", "servers": list(ALLOWED_SERVERS.keys())}
 
 
 @app.api_route("/mcp/{server_name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-async def proxy_mcp(server_name: str, path: str, request: Request):
-    """
-    Proxy requests to allowed MCP servers.
+async def proxy_mcp(server_name: str, path: str, request: Request, claims: dict = Depends(validate_jwt)):
+    start = time.time()
+    user = claims.get("sub", claims.get("username", "unknown"))
     
-    URL pattern: /mcp/{server_name}/{path}
-    Example: /mcp/context7/resolve-library-id
-    """
-    start_time = time.time()
-    user = request.headers.get("x-user-id") or request.headers.get("x-api-key", "anonymous")
+    # Validate server_name format (alphanumeric, hyphens, underscores only)
+    if not re.match(r'^[a-zA-Z0-9_-]+$', server_name):
+        log_audit("mcp_request", server=server_name, status="invalid_server_name", user=user)
+        raise HTTPException(400, "Invalid server name format")
     
-    # Allowlist check
     if server_name not in ALLOWED_SERVERS:
-        log_audit(
-            event_type="mcp_blocked",
-            server=server_name,
-            path=path,
-            method=request.method,
-            status=403,
-            latency_ms=0,
-            user=user,
-            error="Server not in allowlist",
-        )
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "forbidden",
-                "message": f"Server '{server_name}' is not in the allowed list",
-                "allowed_servers": list(ALLOWED_SERVERS.keys()),
-            },
-        )
+        log_audit("mcp_request", server=server_name, status="blocked", user=user)
+        raise HTTPException(403, f"Server '{server_name}' not in allowlist")
     
-    target_base = ALLOWED_SERVERS[server_name].rstrip("/")
-    target_url = f"{target_base}/{path}" if path else target_base
+    # Validate path to prevent path traversal attacks (including encoded variants)
+    decoded_path = unquote(path)
+    # Check for path traversal in decoded path before normalization
+    if ".." in decoded_path:
+        log_audit("mcp_request", server=server_name, path=path, status="invalid_path", user=user)
+        raise HTTPException(400, "Invalid path format")
+    # Normalize and check again
+    normalized_path = os.path.normpath(decoded_path)
+    if ".." in normalized_path or normalized_path.startswith("/"):
+        log_audit("mcp_request", server=server_name, path=path, status="invalid_path", user=user)
+        raise HTTPException(400, "Invalid path format")
     
-    # Build headers, stripping sensitive ones
-    proxy_headers = {
-        k: v for k, v in request.headers.items()
-        if k.lower() not in STRIP_REQUEST_HEADERS
-    }
-    
-    # Add gateway identification
-    proxy_headers["x-forwarded-by"] = "mcp-gateway"
-    proxy_headers["x-original-host"] = request.headers.get("host", "unknown")
+    upstream_url = f"{ALLOWED_SERVERS[server_name]}/{path}"
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in STRIP_REQUEST_HEADERS}
+    headers["X-Forwarded-User"] = user
+    body = await request.body()
     
     try:
-        body = await request.body()
-        
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            response = await client.request(
-                method=request.method,
-                url=target_url,
-                headers=proxy_headers,
-                content=body,
-                params=request.query_params,
-            )
-        
-        latency_ms = (time.time() - start_time) * 1000
-        
-        log_audit(
-            event_type="mcp_invocation",
-            server=server_name,
-            path=path,
-            method=request.method,
-            status=response.status_code,
-            latency_ms=latency_ms,
-            user=user,
-        )
-        
-        # Build response headers
-        response_headers = {
-            k: v for k, v in response.headers.items()
-            if k.lower() not in STRIP_RESPONSE_HEADERS
-        }
-        
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            headers=response_headers,
-            media_type=response.headers.get("content-type"),
-        )
-        
+        async with httpx.AsyncClient(timeout=60) as client:
+            if "text/event-stream" in request.headers.get("accept", ""):
+                async def stream():
+                    async with client.stream(request.method, upstream_url, headers=headers, content=body, params=request.query_params) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+                log_audit("mcp_request", server=server_name, path=path, status="streaming", user=user)
+                return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+            else:
+                resp = await client.request(request.method, upstream_url, headers=headers, content=body, params=request.query_params)
+                log_audit("mcp_request", server=server_name, path=path, status=resp.status_code, user=user, latency_ms=round((time.time()-start)*1000, 2))
+                resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in STRIP_RESPONSE_HEADERS}
+                return JSONResponse(content=resp.json() if "application/json" in resp.headers.get("content-type", "") else resp.text, status_code=resp.status_code, headers=resp_headers)
     except httpx.TimeoutException:
-        latency_ms = (time.time() - start_time) * 1000
-        log_audit(
-            event_type="mcp_error",
-            server=server_name,
-            path=path,
-            method=request.method,
-            status=504,
-            latency_ms=latency_ms,
-            user=user,
-            error="Upstream timeout",
-        )
-        raise HTTPException(504, detail={"error": "timeout", "message": "Upstream server timed out"})
-    
-    except httpx.ConnectError as e:
-        latency_ms = (time.time() - start_time) * 1000
-        log_audit(
-            event_type="mcp_error",
-            server=server_name,
-            path=path,
-            method=request.method,
-            status=502,
-            latency_ms=latency_ms,
-            user=user,
-            error=f"Connection failed: {str(e)}",
-        )
-        raise HTTPException(502, detail={"error": "bad_gateway", "message": "Failed to connect to upstream server"})
-    
-    except Exception as e:
-        latency_ms = (time.time() - start_time) * 1000
-        log_audit(
-            event_type="mcp_error",
-            server=server_name,
-            path=path,
-            method=request.method,
-            status=500,
-            latency_ms=latency_ms,
-            user=user,
-            error=str(e),
-        )
-        raise HTTPException(500, detail={"error": "internal_error", "message": str(e)})
-
-
-# SSE/Streaming support for MCP servers that use it
-@app.api_route("/mcp/{server_name}", methods=["GET", "POST", "OPTIONS"])
-async def proxy_mcp_root(server_name: str, request: Request):
-    """Handle requests to server root (no path)."""
-    return await proxy_mcp(server_name, "", request)
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+        log_audit("mcp_request", server=server_name, status="timeout", user=user)
+        raise HTTPException(504, "Upstream timeout")
+    except httpx.HTTPError as e:
+        log_audit("mcp_request", server=server_name, status="error", user=user, error=str(e))
+        raise HTTPException(502, f"Upstream error: {e}")
