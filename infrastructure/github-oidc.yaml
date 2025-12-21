@@ -63,6 +63,12 @@ Resources:
                   - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/mcp-gateway/*
                   - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/aws-sam-cli-managed-default/*
               
+              # Additional CloudFormation permission for describe-stacks
+              - Effect: Allow
+                Action:
+                  - cloudformation:ListStackResources
+                Resource: "*"
+              
               # S3 permissions for SAM artifacts
               - Effect: Allow
                 Action:
