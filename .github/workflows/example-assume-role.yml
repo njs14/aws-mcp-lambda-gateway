@@ -42,9 +42,15 @@ jobs:
           echo "Assumed Role ARN: ${{ needs.assume-role-and-deploy.outputs.assumed-role-arn }}"
           echo "AWS Account ID: ${{ needs.assume-role-and-deploy.outputs.aws-account-id }}"
       
+      - name: Example - Configure AWS Credentials in Subsequent Job
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+          role-to-assume: ${{ inputs.role-arn }}
+      
       - name: Example - List S3 Buckets (requires appropriate permissions)
         run: |
-          echo "This is where you would use the assumed role credentials"
-          echo "Note: The AWS credentials from the assume-role job are not automatically"
-          echo "available in subsequent jobs. You would need to reconfigure credentials"
-          echo "in this job if you need to make AWS API calls."
+          echo "Now you can use AWS CLI commands with the assumed role credentials"
+          # aws s3 ls

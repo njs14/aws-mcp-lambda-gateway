@@ -40,6 +40,9 @@ on:
 jobs:
   assume-role:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     outputs:
       assumed-role-arn: ${{ steps.assume-role.outputs.role-arn }}
       aws-account-id: ${{ steps.assume-role.outputs.account-id }}
@@ -58,6 +61,7 @@ jobs:
       - name: Get Assumed Role Information
         id: assume-role
         run: |
+          set -e
           CALLER_IDENTITY=$(aws sts get-caller-identity)
           ROLE_ARN=$(echo $CALLER_IDENTITY | jq -r '.Arn')
           ACCOUNT_ID=$(echo $CALLER_IDENTITY | jq -r '.Account')
