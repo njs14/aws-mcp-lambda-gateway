@@ -24,6 +24,9 @@ on:
 
 jobs:
   assume-role-and-deploy:
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/aws-sts-assume-role.yml
     with:
       aws-region: ${{ inputs.aws-region }}
@@ -37,6 +40,9 @@ jobs:
   use-assumed-credentials:
     needs: assume-role-and-deploy
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Display Assumed Role Information
         run: |
