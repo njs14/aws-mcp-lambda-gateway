@@ -1,5 +1,5 @@
 # SAM deployment configuration
-# Run: sam deploy --guided (first time) or sam deploy (subsequent)
+# Run: sam deploy
 
 version = 0.1
 
@@ -10,34 +10,11 @@ s3_prefix = "mcp-gateway"
 region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
-
-[default.build.parameters]
-use_container = false
-
-[dev.deploy.parameters]
-stack_name = "mcp-gateway-dev"
-resolve_s3 = true
-s3_prefix = "mcp-gateway"
-region = "us-east-1"
-confirm_changeset = true
-capabilities = "CAPABILITY_IAM"
 resolve_image_repos = true
 parameter_overrides = [
-    "Environment=dev",
     # Add your allowed servers here
     "AllowedServersJson={\"context7\":\"https://mcp.context7.com/mcp\",\"notion\":\"https://mcp.notion.com/mcp\"}"
 ]
 
-[prod.deploy.parameters]
-stack_name = "mcp-gateway-prod"
-resolve_s3 = true
-s3_prefix = "mcp-gateway"
-region = "us-east-1"
-confirm_changeset = true
-capabilities = "CAPABILITY_IAM"
-resolve_image_repos = true
-parameter_overrides = [
-    "Environment=prod",
-    # Production server list
-    "AllowedServersJson={\"context7\":\"https://mcp.context7.com/mcp\"}"
-]
+[default.build.parameters]
+use_container = false

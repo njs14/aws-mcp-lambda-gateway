@@ -5,15 +5,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment to deploy'
-        required: true
-        default: 'dev'
-        type: choice
-        options:
-          - dev
-          - prod
 
 permissions:
   id-token: write
@@ -55,23 +46,14 @@ jobs:
         run: sam build
 
       - name: SAM Deploy
-        run: |
-          if [ "${{ github.event.inputs.environment }}" == "prod" ]; then
-            sam deploy --config-env prod --no-confirm-changeset
-          else
-            sam deploy --config-env dev --no-confirm-changeset
-          fi
+        run: sam deploy --no-confirm-changeset
 
       - name: Get Stack Outputs
         run: |
-          ENV="${{ github.event.inputs.environment || 'dev' }}"
-          STACK_NAME="mcp-gateway-${ENV}"
           echo "### Deployment Successful! :rocket:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${ENV}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Stack Outputs:**" >> $GITHUB_STEP_SUMMARY
           aws cloudformation describe-stacks \
-            --stack-name ${STACK_NAME} \
+            --stack-name mcp-gateway \
             --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
             --output table >> $GITHUB_STEP_SUMMARY
