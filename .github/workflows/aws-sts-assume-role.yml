@@ -1,0 +1,76 @@
+name: AWS STS Assume Role
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        description: 'AWS Region'
+        required: false
+        type: string
+        default: 'us-east-1'
+      role-to-assume:
+        description: 'AWS IAM Role ARN to assume'
+        required: true
+        type: string
+      role-session-name:
+        description: 'Role session name'
+        required: false
+        type: string
+        default: 'GitHubActions'
+      role-duration-seconds:
+        description: 'Role session duration in seconds'
+        required: false
+        type: number
+        default: 3600
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        description: 'AWS Access Key ID'
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        description: 'AWS Secret Access Key'
+        required: true
+    outputs:
+      assumed-role-arn:
+        description: 'ARN of the assumed role'
+        value: ${{ jobs.assume-role.outputs.assumed-role-arn }}
+      aws-account-id:
+        description: 'AWS Account ID'
+        value: ${{ jobs.assume-role.outputs.aws-account-id }}
+
+jobs:
+  assume-role:
+    runs-on: ubuntu-latest
+    outputs:
+      assumed-role-arn: ${{ steps.assume-role.outputs.role-arn }}
+      aws-account-id: ${{ steps.assume-role.outputs.account-id }}
+    
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+          role-to-assume: ${{ inputs.role-to-assume }}
+          role-session-name: ${{ inputs.role-session-name }}
+          role-duration-seconds: ${{ inputs.role-duration-seconds }}
+      
+      - name: Get Assumed Role Information
+        id: assume-role
+        run: |
+          CALLER_IDENTITY=$(aws sts get-caller-identity)
+          ROLE_ARN=$(echo $CALLER_IDENTITY | jq -r '.Arn')
+          ACCOUNT_ID=$(echo $CALLER_IDENTITY | jq -r '.Account')
+          
+          echo "role-arn=$ROLE_ARN" >> $GITHUB_OUTPUT
+          echo "account-id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+          
+          echo "✅ Successfully assumed role"
+          echo "Role ARN: $ROLE_ARN"
+          echo "Account ID: $ACCOUNT_ID"
+      
+      - name: Verify AWS Access
+        run: |
+          echo "Verifying AWS access..."
+          aws sts get-caller-identity
+          echo "✅ AWS access verified"
