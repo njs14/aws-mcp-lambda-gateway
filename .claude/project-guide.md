@@ -43,7 +43,7 @@ resolve_image_repos = true     # Auto-create ECR repo for Docker images
 The workflow uses:
 - **Python 3.12**: Matches Lambda runtime
 - **Docker Buildx + QEMU**: Required for ARM64 builds on x86_64 runners
-- **AWS OIDC**: Secure credential-less authentication
+- **AWS OIDC**: Secure credentialless authentication
 - **SAM CLI**: Build and deploy
 
 **Key Steps**:
