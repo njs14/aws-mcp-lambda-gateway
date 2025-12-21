@@ -7,8 +7,10 @@ Auth: Cognito JWT (RS256)
 
 import json
 import os
+import re
 import time
 from typing import Optional
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -99,9 +101,26 @@ async def proxy_mcp(server_name: str, path: str, request: Request, claims: dict 
     start = time.time()
     user = claims.get("sub", claims.get("username", "unknown"))
     
+    # Validate server_name format (alphanumeric, hyphens, underscores only)
+    if not re.match(r'^[a-zA-Z0-9_-]+$', server_name):
+        log_audit("mcp_request", server=server_name, status="invalid_server_name", user=user)
+        raise HTTPException(400, "Invalid server name format")
+    
     if server_name not in ALLOWED_SERVERS:
         log_audit("mcp_request", server=server_name, status="blocked", user=user)
         raise HTTPException(403, f"Server '{server_name}' not in allowlist")
+    
+    # Validate path to prevent path traversal attacks (including encoded variants)
+    decoded_path = unquote(path)
+    # Check for path traversal in decoded path before normalization
+    if ".." in decoded_path:
+        log_audit("mcp_request", server=server_name, path=path, status="invalid_path", user=user)
+        raise HTTPException(400, "Invalid path format")
+    # Normalize and check again
+    normalized_path = os.path.normpath(decoded_path)
+    if ".." in normalized_path or normalized_path.startswith("/"):
+        log_audit("mcp_request", server=server_name, path=path, status="invalid_path", user=user)
+        raise HTTPException(400, "Invalid path format")
     
     upstream_url = f"{ALLOWED_SERVERS[server_name]}/{path}"
     headers = {k: v for k, v in request.headers.items() if k.lower() not in STRIP_REQUEST_HEADERS}
