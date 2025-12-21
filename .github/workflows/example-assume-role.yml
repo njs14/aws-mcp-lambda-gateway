@@ -1,12 +1,13 @@
 name: Example - AWS STS Assume Role Usage
 
 # This is an example workflow demonstrating how to use the aws-sts-assume-role workflow
-# To use this workflow:
+# 
+# RECOMMENDED: Use OIDC authentication (see README.md) instead of long-lived credentials
+# For this example with long-lived credentials:
 # 1. Configure your AWS credentials in GitHub secrets:
 #    - AWS_ACCESS_KEY_ID
 #    - AWS_SECRET_ACCESS_KEY
 # 2. Update the role-to-assume input with your AWS IAM Role ARN
-# 3. Uncomment the workflow_dispatch trigger or set up the appropriate trigger for your use case
 
 on:
   workflow_dispatch:

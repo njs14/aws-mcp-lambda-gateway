@@ -63,8 +63,8 @@ jobs:
         run: |
           set -e
           CALLER_IDENTITY=$(aws sts get-caller-identity)
-          ROLE_ARN=$(echo $CALLER_IDENTITY | jq -r '.Arn')
-          ACCOUNT_ID=$(echo $CALLER_IDENTITY | jq -r '.Account')
+          ROLE_ARN=$(echo "$CALLER_IDENTITY" | jq -r '.Arn')
+          ACCOUNT_ID=$(echo "$CALLER_IDENTITY" | jq -r '.Account')
           
           echo "role-arn=$ROLE_ARN" >> $GITHUB_OUTPUT
           echo "account-id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
