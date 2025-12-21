@@ -1,12 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: MCP Gateway - Lightweight serverless proxy for MCP server governance
+Description: MCP Gateway - CloudFront + Lambda Function URL + Cognito
 
 Parameters:
   AllowedServersJson:
     Type: String
-    Description: JSON object mapping server names to URLs
-    Default: '{}'
+    Description: JSON mapping server names to upstream URLs
+    Default: '{"context7":"https://mcp.context7.com/mcp","notion":"https://mcp.notion.com/mcp"}'
+  
+  FirewallManagerTag:
+    Type: String
+    Default: waf-managed
 
 Globals:
   Function:
@@ -14,31 +18,62 @@ Globals:
     MemorySize: 512
 
 Resources:
+  # Cognito User Pool
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: mcp-gateway-users
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: mcp-gateway-client
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub mcp-gateway-${AWS::AccountId}
+      UserPoolId: !Ref UserPool
+
+  # Lambda Function
   McpGatewayFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: mcp-gateway
       PackageType: Image
-      Architectures:
-        - arm64
+      Architectures: [arm64]
       Environment:
         Variables:
           ALLOWED_SERVERS: !Ref AllowedServersJson
+          COGNITO_ISSUER: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+          COGNITO_AUDIENCE: !Ref UserPoolClient
           AWS_LWA_INVOKE_MODE: response_stream
           AWS_LWA_PORT: 8080
-      Events:
-        ProxyAll:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref McpGatewayApi
-            Path: /{proxy+}
-            Method: ANY
-        Root:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref McpGatewayApi
-            Path: /
-            Method: ANY
+      FunctionUrlConfig:
+        AuthType: AWS_IAM
+        InvokeMode: RESPONSE_STREAM
       Policies:
         - CloudWatchLogsFullAccess
     Metadata:
@@ -46,21 +81,55 @@ Resources:
       DockerContext: ./src
       DockerTag: latest
 
-  McpGatewayApi:
-    Type: AWS::Serverless::HttpApi
+  # OAC for CloudFront -> Lambda
+  McpGatewayOAC:
+    Type: AWS::CloudFront::OriginAccessControl
     Properties:
-      StageName: prod
-      CorsConfiguration:
-        AllowOrigins:
-          - "*"
-        AllowMethods:
-          - GET
-          - POST
-          - OPTIONS
-        AllowHeaders:
-          - "*"
+      OriginAccessControlConfig:
+        Name: mcp-gateway-oac
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
 
-  # CloudWatch Log Group with retention
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      Tags:
+        - Key: !Ref FirewallManagerTag
+          Value: "true"
+      DistributionConfig:
+        Enabled: true
+        Comment: MCP Gateway
+        DefaultCacheBehavior:
+          TargetOriginId: LambdaFunctionUrl
+          ViewerProtocolPolicy: https-only
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader
+          Compress: true
+        Origins:
+          - Id: LambdaFunctionUrl
+            DomainName: !Select [2, !Split ["/", !GetAtt McpGatewayFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+            OriginAccessControlId: !Ref McpGatewayOAC
+        PriceClass: PriceClass_100
+        HttpVersion: http2and3
+
+  # Lambda permission for CloudFront
+  McpGatewayFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref McpGatewayFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+      FunctionUrlAuthType: AWS_IAM
+
+  # Logs
   McpGatewayLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -84,21 +153,27 @@ Resources:
               Value: $.status
 
 Outputs:
-  McpGatewayUrl:
-    Description: MCP Gateway endpoint URL
-    Value: !Sub "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  GatewayUrl:
+    Description: MCP Gateway URL (use this in your IDE)
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
 
-  McpRegistryExample:
-    Description: Example registry entry pointing to this gateway
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+
+  CognitoClientId:
+    Description: Cognito Client ID (for auth)
+    Value: !Ref UserPoolClient
+
+  CognitoIssuer:
+    Description: Cognito Issuer URL
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+
+  CognitoHostedUI:
+    Description: Cognito hosted login page
+    Value: !Sub https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=token&scope=openid+email&redirect_uri=http://localhost:8080/callback
+
+  CreateTestUser:
+    Description: Command to create a test user
     Value: !Sub |
-      {
-        "server": {
-          "name": "your-server",
-          "description": "Proxied through gateway",
-          "version": "1.0.0",
-          "remotes": [{
-            "type": "streamable-http",
-            "url": "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/prod/mcp/your-server"
-          }]
-        }
-      }
+      aws cognito-idp admin-create-user --user-pool-id ${UserPool} --username you@example.com --temporary-password TempPass123! --message-action SUPPRESS
