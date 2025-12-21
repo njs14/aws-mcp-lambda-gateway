@@ -75,7 +75,13 @@ Resources:
         AuthType: AWS_IAM
         InvokeMode: RESPONSE_STREAM
       Policies:
-        - CloudWatchLogsFullAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/mcp-gateway:*
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: ./src
@@ -92,6 +98,8 @@ Resources:
         SigningProtocol: sigv4
 
   # CloudFront Distribution
+  # SECURITY NOTE: Consider adding AWS WAF (Web Application Firewall) protection
+  # The FirewallManagerTag below is set for future WAF integration
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -101,6 +109,7 @@ Resources:
       DistributionConfig:
         Enabled: true
         Comment: MCP Gateway
+        # WebACLId: !Ref WebACL  # Uncomment and add WAF WebACL resource for production
         DefaultCacheBehavior:
           TargetOriginId: LambdaFunctionUrl
           ViewerProtocolPolicy: https-only
