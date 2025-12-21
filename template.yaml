@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: MCP Gateway - Lightweight serverless proxy for MCP server governance
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  
+  AllowedServersJson:
+    Type: String
+    Description: JSON object mapping server names to URLs
+    Default: '{}'
+
+Globals:
+  Function:
+    Timeout: 120
+    MemorySize: 512
+
+Resources:
+  McpGatewayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub mcp-gateway-${Environment}
+      PackageType: Image
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          ALLOWED_SERVERS: !Ref AllowedServersJson
+          AWS_LWA_INVOKE_MODE: response_stream
+          AWS_LWA_PORT: 8080
+      Events:
+        ProxyAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref McpGatewayApi
+            Path: /{proxy+}
+            Method: ANY
+        Root:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref McpGatewayApi
+            Path: /
+            Method: ANY
+      Policies:
+        - CloudWatchLogsFullAccess
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: ./src
+      DockerTag: latest
+
+  McpGatewayApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - "*"
+
+  # CloudWatch Log Group with retention
+  McpGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/mcp-gateway-${Environment}
+      RetentionInDays: 30
+
+  # Optional: Metric filter for audit trail
+  McpInvocationMetric:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref McpGatewayLogGroup
+      FilterPattern: '{ $.event = "mcp_invocation" }'
+      MetricTransformations:
+        - MetricName: McpToolInvocations
+          MetricNamespace: McpGateway
+          MetricValue: "1"
+          Dimensions:
+            - Key: Server
+              Value: $.server
+            - Key: Status
+              Value: $.status
+
+Outputs:
+  McpGatewayUrl:
+    Description: MCP Gateway endpoint URL
+    Value: !Sub "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+  
+  McpRegistryExample:
+    Description: Example registry entry pointing to this gateway
+    Value: !Sub |
+      {
+        "server": {
+          "name": "your-server",
+          "description": "Proxied through gateway",
+          "version": "1.0.0",
+          "remotes": [{
+            "type": "streamable-http",
+            "url": "https://${McpGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/mcp/your-server"
+          }]
+        }
+      }

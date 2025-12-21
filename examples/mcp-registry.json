@@ -1,0 +1,53 @@
+{
+  "$comment": "MCP Registry for Kiro/Q Developer governance. Update gateway_url after deployment.",
+  "servers": [
+    {
+      "server": {
+        "name": "context7",
+        "title": "Context7 Library Docs",
+        "description": "Library and package documentation lookup",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/dev/mcp/context7"
+          }
+        ]
+      }
+    },
+    {
+      "server": {
+        "name": "notion",
+        "title": "Notion Workspace",
+        "description": "Access Notion pages and databases",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "sse",
+            "url": "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/dev/mcp/notion",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Bearer ${NOTION_API_KEY}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "server": {
+        "name": "aws-docs",
+        "title": "AWS Documentation",
+        "description": "Search and read AWS documentation",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/dev/mcp/aws-docs"
+          }
+        ]
+      }
+    }
+  ]
+}
