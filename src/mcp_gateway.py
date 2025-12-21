@@ -10,6 +10,7 @@ import os
 import re
 import time
 from typing import Optional
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -109,8 +110,10 @@ async def proxy_mcp(server_name: str, path: str, request: Request, claims: dict 
         log_audit("mcp_request", server=server_name, status="blocked", user=user)
         raise HTTPException(403, f"Server '{server_name}' not in allowlist")
     
-    # Validate path to prevent path traversal attacks
-    if ".." in path or path.startswith("/"):
+    # Validate path to prevent path traversal attacks (including encoded variants)
+    decoded_path = unquote(path)
+    normalized_path = os.path.normpath(decoded_path)
+    if ".." in normalized_path or normalized_path.startswith("/") or normalized_path != decoded_path.lstrip("/"):
         log_audit("mcp_request", server=server_name, path=path, status="invalid_path", user=user)
         raise HTTPException(400, "Invalid path format")
     

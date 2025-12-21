@@ -75,7 +75,8 @@ Resources:
         AuthType: AWS_IAM
         InvokeMode: RESPONSE_STREAM
       Policies:
-        - Statement:
+        - Version: '2012-10-17'
+          Statement:
             - Effect: Allow
               Action:
                 - logs:CreateLogGroup

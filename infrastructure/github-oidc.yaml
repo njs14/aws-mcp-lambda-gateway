@@ -179,6 +179,8 @@ Resources:
                   - !Sub arn:aws:cognito-idp:*:${AWS::AccountId}:userpool/*
               
               # CloudFront permissions
+              # Note: CloudFront is a global service and most operations require Resource: "*"
+              # We limit to only necessary actions and rely on CloudFormation stack constraints
               - Effect: Allow
                 Action:
                   - cloudfront:CreateDistribution
@@ -193,6 +195,9 @@ Resources:
                   - cloudfront:DeleteOriginAccessControl
                   - cloudfront:ListOriginAccessControls
                 Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: us-east-1  # CloudFront only operates in us-east-1
 
 Outputs:
   RoleArn:
