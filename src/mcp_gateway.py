@@ -112,8 +112,13 @@ async def proxy_mcp(server_name: str, path: str, request: Request, claims: dict 
     
     # Validate path to prevent path traversal attacks (including encoded variants)
     decoded_path = unquote(path)
+    # Check for path traversal in decoded path before normalization
+    if ".." in decoded_path:
+        log_audit("mcp_request", server=server_name, path=path, status="invalid_path", user=user)
+        raise HTTPException(400, "Invalid path format")
+    # Normalize and check again
     normalized_path = os.path.normpath(decoded_path)
-    if ".." in normalized_path or normalized_path.startswith("/") or normalized_path != decoded_path.lstrip("/"):
+    if ".." in normalized_path or normalized_path.startswith("/"):
         log_audit("mcp_request", server=server_name, path=path, status="invalid_path", user=user)
         raise HTTPException(400, "Invalid path format")
     
