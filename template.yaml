@@ -47,7 +47,6 @@ Resources:
         - COGNITO
       AllowedOAuthFlows:
         - code
-        - implicit
       AllowedOAuthScopes:
         - openid
         - email
@@ -76,7 +75,7 @@ Resources:
       Domain: !Sub mcp-gateway-${AWS::AccountId}
       UserPoolId: !Ref UserPool
 
-  # Lambda Function  
+  # Lambda Function
   McpGatewayFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -89,14 +88,19 @@ Resources:
           COGNITO_ISSUER: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
           COGNITO_AUDIENCE: !Ref UserPoolClient
           COGNITO_DOMAIN: !Sub ${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
-          GATEWAY_URL: !Sub https://${CloudFrontDistribution.DomainName}
           AWS_LWA_INVOKE_MODE: response_stream
           AWS_LWA_PORT: 8080
       FunctionUrlConfig:
         AuthType: AWS_IAM
         InvokeMode: RESPONSE_STREAM
       Policies:
-        - CloudWatchLogsFullAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/mcp-gateway:*
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: ./src
@@ -155,7 +159,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /aws/lambda/mcp-gateway
-      RetentionInDays: 14
+      RetentionInDays: 30
 
   # Metric Filters
   MetricFilterRequests:
