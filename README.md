@@ -1,17 +1,17 @@
 # MCP Gateway
 
-Serverless MCP proxy with Cognito auth.
+Serverless MCP proxy with OAuth discovery. IDEs auto-discover authentication via Cognito.
 
 ## Deploy
 
+Push to `main` branch — GitHub Actions handles it.
+
+Or manually:
 ```bash
-sam build
-sam deploy
+sam build && sam deploy
 ```
 
 ## Create Test User
-
-After deploy, run the command from stack outputs:
 
 ```bash
 aws cognito-idp admin-create-user \
@@ -19,20 +19,35 @@ aws cognito-idp admin-create-user \
   --username you@example.com \
   --temporary-password TempPass123! \
   --message-action SUPPRESS
+
+aws cognito-idp admin-set-user-password \
+  --user-pool-id <from-outputs> \
+  --username you@example.com \
+  --password YourPermanentPass123! \
+  --permanent
 ```
 
-## Get Token
+## IDE Setup
+
+**Cursor** (Settings → MCP Servers):
+```json
+{
+  "mcpServers": {
+    "my-gateway": {
+      "url": "https://YOUR_CLOUDFRONT_DOMAIN/mcp/context7"
+    }
+  }
+}
+```
+
+## Verify OAuth Discovery
 
 ```bash
-aws cognito-idp initiate-auth \
-  --client-id <from-outputs> \
-  --auth-flow USER_PASSWORD_AUTH \
-  --auth-parameters USERNAME=you@example.com,PASSWORD=YourNewPassword123!
+curl https://YOUR_CLOUDFRONT_DOMAIN/.well-known/oauth-protected-resource
 ```
 
-## Test
+## Monitoring
 
-```bash
-curl -H "Authorization: Bearer <token>" \
-  https://<cloudfront-domain>/mcp/context7/
-```
+- **Dashboard:** CloudWatch → Dashboards → `mcp-gateway`
+- **Alarms:** Auth failures, server errors, high latency, Lambda errors
+- **Metrics:** Request count, latency percentiles, errors by type

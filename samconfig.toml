@@ -1,6 +1,3 @@
-# SAM deployment configuration
-# Run: sam deploy
-
 version = 0.1
 
 [default.global.parameters]
@@ -19,8 +16,3 @@ region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 confirm_changeset = false
 fail_on_empty_changeset = false
-resolve_image_repos = true
-parameter_overrides = [
-    # Add your allowed servers here
-    "AllowedServersJson={\"context7\":\"https://mcp.context7.com/mcp\",\"notion\":\"https://mcp.notion.com/mcp\"}"
-]
