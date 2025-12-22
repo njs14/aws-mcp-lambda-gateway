@@ -1,37 +1,58 @@
 # MCP Gateway
 
-Serverless MCP proxy for personal use. CloudFront + Lambda Function URL + Cognito.
+Serverless MCP proxy with OAuth discovery for IDE integration.
 
 ## Architecture
 
 ```
 IDE ──► CloudFront ──► Lambda Function URL ──► MCP Server
             │                 │
-      (Firewall Mgr)    (Cognito JWT)
+      (Firewall Mgr)    (JWT validation)
+                              │
+                        Cognito (IdP)
 ```
+
+Implements MCP Authorization Spec (2025-06-18) with RFC 9728 Protected Resource Metadata.
 
 ## Deploy
 
-```bash
-sam build && sam deploy
-```
+Push to `main` — GitHub Actions deploys automatically.
+
+Or: `sam build && sam deploy`
 
 ## Key Files
 
-- `template.yaml` - SAM (CloudFront + Lambda + Cognito)
-- `src/mcp_gateway.py` - FastAPI proxy
+- `template.yaml` - SAM (CloudFront + Lambda + Cognito + Monitoring)
+- `src/mcp_gateway.py` - FastAPI proxy with OAuth discovery
 - `src/Dockerfile` - Lambda Web Adapter
 
-## After Deploy
+## Monitoring
 
-1. Create a Cognito user (command in stack outputs)
-2. Get a token from Cognito
-3. Call gateway with `Authorization: Bearer <token>`
+**Metrics** (MCPGateway namespace):
+- `RequestCount` - Total requests by server
+- `AuthFailureCount` - Auth failures by reason
+- `ServerErrorCount` - 5xx errors
+- `BlockedRequestCount` - Requests to non-allowlisted servers
+- `Latency` - Request latency in ms
+
+**Alarms:**
+- `mcp-gateway-auth-failures` - >10 auth failures in 5 min
+- `mcp-gateway-server-errors` - >5 server errors in 5 min
+- `mcp-gateway-high-latency` - p99 latency >5s
+- `mcp-gateway-lambda-errors` - Any Lambda errors
+
+**Dashboard:** `mcp-gateway` in CloudWatch
+
+## OAuth Discovery
+
+IDEs discover auth automatically via:
+```
+GET /.well-known/oauth-protected-resource
+```
 
 ## Swapping to Okta
 
-Change env vars in template.yaml:
-- `COGNITO_ISSUER` → `OKTA_ISSUER`
-- `COGNITO_AUDIENCE` → `OKTA_AUDIENCE`
-
-Update Python to use `aud` claim instead of `client_id`.
+Update env vars:
+- `COGNITO_ISSUER` → Okta issuer URL
+- `COGNITO_AUDIENCE` → Okta client ID  
+- `COGNITO_DOMAIN` → Okta auth domain

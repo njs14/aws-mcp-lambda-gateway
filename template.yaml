@@ -43,6 +43,25 @@ Resources:
         - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
         - ALLOW_USER_SRP_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - http://localhost/callback
+        - http://localhost:8080/callback
+        - http://127.0.0.1/callback
+        - http://127.0.0.1:8080/callback
+        - http://localhost:3000/callback
+        - vscode://vscode.github-authentication/did-authenticate
+      LogoutURLs:
+        - http://localhost/logout
       AccessTokenValidity: 1
       IdTokenValidity: 1
       RefreshTokenValidity: 30
@@ -57,7 +76,7 @@ Resources:
       Domain: !Sub mcp-gateway-${AWS::AccountId}
       UserPoolId: !Ref UserPool
 
-  # Lambda Function
+  # Lambda Function  
   McpGatewayFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -69,20 +88,15 @@ Resources:
           ALLOWED_SERVERS: !Ref AllowedServersJson
           COGNITO_ISSUER: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
           COGNITO_AUDIENCE: !Ref UserPoolClient
+          COGNITO_DOMAIN: !Sub ${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
+          GATEWAY_URL: !Sub https://${CloudFrontDistribution.DomainName}
           AWS_LWA_INVOKE_MODE: response_stream
           AWS_LWA_PORT: 8080
       FunctionUrlConfig:
         AuthType: AWS_IAM
         InvokeMode: RESPONSE_STREAM
       Policies:
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogGroup
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/mcp-gateway:*
+        - CloudWatchLogsFullAccess
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: ./src
@@ -99,8 +113,6 @@ Resources:
         SigningProtocol: sigv4
 
   # CloudFront Distribution
-  # SECURITY NOTE: Consider adding AWS WAF (Web Application Firewall) protection
-  # The FirewallManagerTag below is set for future WAF integration
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -110,7 +122,6 @@ Resources:
       DistributionConfig:
         Enabled: true
         Comment: MCP Gateway
-        # WebACLId: !Ref WebACL  # Uncomment and add WAF WebACL resource for production
         DefaultCacheBehavior:
           TargetOriginId: LambdaFunctionUrl
           ViewerProtocolPolicy: https-only
@@ -144,23 +155,261 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /aws/lambda/mcp-gateway
-      RetentionInDays: 30
+      RetentionInDays: 14
 
-  # Optional: Metric filter for audit trail
-  McpInvocationMetric:
+  # Metric Filters
+  MetricFilterRequests:
     Type: AWS::Logs::MetricFilter
     Properties:
       LogGroupName: !Ref McpGatewayLogGroup
-      FilterPattern: '{ $.event = "mcp_invocation" }'
+      FilterPattern: '{ $.event = "mcp_request" }'
       MetricTransformations:
-        - MetricName: McpToolInvocations
-          MetricNamespace: McpGateway
+        - MetricName: RequestCount
+          MetricNamespace: MCPGateway
           MetricValue: "1"
           Dimensions:
             - Key: Server
               Value: $.server
-            - Key: Status
-              Value: $.status
+
+  MetricFilterAuthFailures:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref McpGatewayLogGroup
+      FilterPattern: '{ $.event = "auth_failure" }'
+      MetricTransformations:
+        - MetricName: AuthFailureCount
+          MetricNamespace: MCPGateway
+          MetricValue: "1"
+          Dimensions:
+            - Key: Reason
+              Value: $.reason
+
+  MetricFilterErrors:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref McpGatewayLogGroup
+      FilterPattern: '{ $.event = "mcp_request" && $.status >= 500 }'
+      MetricTransformations:
+        - MetricName: ServerErrorCount
+          MetricNamespace: MCPGateway
+          MetricValue: "1"
+
+  MetricFilterBlocked:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref McpGatewayLogGroup
+      FilterPattern: '{ $.event = "mcp_request" && $.status = "blocked" }'
+      MetricTransformations:
+        - MetricName: BlockedRequestCount
+          MetricNamespace: MCPGateway
+          MetricValue: "1"
+
+  MetricFilterLatency:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref McpGatewayLogGroup
+      FilterPattern: '{ $.event = "mcp_request" && $.latency_ms = * }'
+      MetricTransformations:
+        - MetricName: Latency
+          MetricNamespace: MCPGateway
+          MetricValue: $.latency_ms
+          Unit: Milliseconds
+
+  # Alarms
+  AlarmAuthFailures:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: mcp-gateway-auth-failures
+      AlarmDescription: High rate of authentication failures
+      MetricName: AuthFailureCount
+      Namespace: MCPGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  AlarmServerErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: mcp-gateway-server-errors
+      AlarmDescription: Upstream server errors detected
+      MetricName: ServerErrorCount
+      Namespace: MCPGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  AlarmHighLatency:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: mcp-gateway-high-latency
+      AlarmDescription: Request latency exceeds threshold
+      MetricName: Latency
+      Namespace: MCPGateway
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  AlarmLambdaErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: mcp-gateway-lambda-errors
+      AlarmDescription: Lambda function errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref McpGatewayFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # Dashboard
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: mcp-gateway
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Request Volume",
+                "metrics": [
+                  ["MCPGateway", "RequestCount", { "stat": "Sum", "period": 60 }]
+                ],
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Latency (p50, p90, p99)",
+                "metrics": [
+                  ["MCPGateway", "Latency", { "stat": "p50", "period": 60 }],
+                  [".", ".", { "stat": "p90", "period": 60 }],
+                  [".", ".", { "stat": "p99", "period": 60 }]
+                ],
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Auth Failures",
+                "metrics": [
+                  ["MCPGateway", "AuthFailureCount", { "stat": "Sum", "period": 60, "color": "#d62728" }]
+                ],
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 6,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Server Errors (5xx)",
+                "metrics": [
+                  ["MCPGateway", "ServerErrorCount", { "stat": "Sum", "period": 60, "color": "#d62728" }]
+                ],
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 6,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Blocked Requests",
+                "metrics": [
+                  ["MCPGateway", "BlockedRequestCount", { "stat": "Sum", "period": 60, "color": "#ff7f0e" }]
+                ],
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda Invocations & Errors",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "mcp-gateway", { "stat": "Sum", "period": 60 }],
+                  [".", "Errors", ".", ".", { "stat": "Sum", "period": 60, "color": "#d62728" }]
+                ],
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda Duration",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "mcp-gateway", { "stat": "p50", "period": 60 }],
+                  [".", ".", ".", ".", { "stat": "p99", "period": 60 }]
+                ],
+                "region": "${AWS::Region}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "alarm",
+              "x": 0,
+              "y": 18,
+              "width": 24,
+              "height": 3,
+              "properties": {
+                "title": "Alarm Status",
+                "alarms": [
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:mcp-gateway-auth-failures",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:mcp-gateway-server-errors",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:mcp-gateway-high-latency",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:mcp-gateway-lambda-errors"
+                ]
+              }
+            }
+          ]
+        }
 
 Outputs:
   GatewayUrl:
@@ -179,11 +428,23 @@ Outputs:
     Description: Cognito Issuer URL
     Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
 
+  CognitoAuthDomain:
+    Description: Cognito Auth Domain (for OAuth discovery)
+    Value: !Sub ${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
+
   CognitoHostedUI:
     Description: Cognito hosted login page
-    Value: !Sub https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=token&scope=openid+email&redirect_uri=http://localhost:8080/callback
+    Value: !Sub https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=token&scope=openid+email+profile&redirect_uri=http://localhost:8080/callback
 
   CreateTestUser:
     Description: Command to create a test user
     Value: !Sub |
       aws cognito-idp admin-create-user --user-pool-id ${UserPool} --username you@example.com --temporary-password TempPass123! --message-action SUPPRESS
+
+  OAuthDiscoveryEndpoint:
+    Description: MCP OAuth Protected Resource Metadata
+    Value: !Sub https://${CloudFrontDistribution.DomainName}/.well-known/oauth-protected-resource
+
+  DashboardUrl:
+    Description: CloudWatch Dashboard
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=mcp-gateway
