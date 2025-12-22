@@ -22,7 +22,6 @@ ALLOWED_SERVERS: dict = json.loads(os.environ.get("ALLOWED_SERVERS", "{}"))
 COGNITO_ISSUER = os.environ.get("COGNITO_ISSUER", "")
 COGNITO_AUDIENCE = os.environ.get("COGNITO_AUDIENCE", "")
 COGNITO_DOMAIN = os.environ.get("COGNITO_DOMAIN", "")  # e.g., mcp-gateway-xxx.auth.us-east-1.amazoncognito.com
-GATEWAY_URL = os.environ.get("GATEWAY_URL", "")  # CloudFront URL
 JWKS_URL = f"{COGNITO_ISSUER}/.well-known/jwks.json"
 
 STRIP_REQUEST_HEADERS = {"host", "x-forwarded-for", "x-forwarded-proto", "x-amzn-trace-id", "authorization"}
@@ -67,26 +66,29 @@ async def health():
 
 # RFC 9728: OAuth 2.0 Protected Resource Metadata
 @app.get("/.well-known/oauth-protected-resource")
-async def oauth_protected_resource():
+async def oauth_protected_resource(request: Request):
     """Tell MCP clients where to authenticate."""
+    # Construct gateway URL from request (works behind CloudFront)
+    gateway_url = str(request.base_url).rstrip("/")
     return JSONResponse({
-        "resource": GATEWAY_URL,
+        "resource": gateway_url,
         "authorization_servers": [f"https://{COGNITO_DOMAIN}"],
         "scopes_supported": ["openid", "email", "profile"],
         "bearer_methods_supported": ["header"],
-        "resource_documentation": f"{GATEWAY_URL}/health"
+        "resource_documentation": f"{gateway_url}/health"
     })
 
 
-def build_www_authenticate() -> str:
+def build_www_authenticate(request: Request) -> str:
     """Build WWW-Authenticate header per MCP spec."""
-    resource_metadata_url = f"{GATEWAY_URL}/.well-known/oauth-protected-resource"
-    return f'Bearer realm="{GATEWAY_URL}", resource_metadata="{resource_metadata_url}"'
+    gateway_url = str(request.base_url).rstrip("/")
+    resource_metadata_url = f"{gateway_url}/.well-known/oauth-protected-resource"
+    return f'Bearer realm="{gateway_url}", resource_metadata="{resource_metadata_url}"'
 
 
-async def validate_jwt_with_challenge(creds: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+async def validate_jwt_with_challenge(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
     """Validate JWT, return proper WWW-Authenticate on failure."""
-    www_auth = build_www_authenticate()
+    www_auth = build_www_authenticate(request)
     
     if not creds:
         log_audit("auth_failure", reason="missing_token")

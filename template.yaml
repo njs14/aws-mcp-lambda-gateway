@@ -89,7 +89,6 @@ Resources:
           COGNITO_ISSUER: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
           COGNITO_AUDIENCE: !Ref UserPoolClient
           COGNITO_DOMAIN: !Sub ${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
-          GATEWAY_URL: !Sub https://${CloudFrontDistribution.DomainName}
           AWS_LWA_INVOKE_MODE: response_stream
           AWS_LWA_PORT: 8080
       FunctionUrlConfig:
