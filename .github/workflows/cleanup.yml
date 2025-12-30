@@ -1,0 +1,74 @@
+name: Cleanup CloudFormation Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DELETE to confirm stack deletion'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DELETE'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Delete CloudFormation Stack
+        id: delete-stack
+        run: |
+          echo "### CloudFormation Stack Cleanup :wastebasket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Stack Name:** mcp-gateway" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** us-east-1" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if stack exists
+          if aws cloudformation describe-stacks --stack-name mcp-gateway --region us-east-1 2>/dev/null; then
+            echo "**Status:** Stack found, initiating deletion..." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Delete the stack
+            aws cloudformation delete-stack --stack-name mcp-gateway --region us-east-1
+            echo "Stack deletion initiated successfully" >> $GITHUB_STEP_SUMMARY
+            echo "deletion_initiated=true" >> $GITHUB_OUTPUT
+          else
+            echo "**Status:** Stack does not exist or has already been deleted" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ No action needed" >> $GITHUB_STEP_SUMMARY
+            echo "deletion_initiated=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for Stack Deletion
+        if: steps.delete-stack.outputs.deletion_initiated == 'true'
+        run: |
+          echo "Waiting for stack deletion to complete..." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Wait for the stack to be deleted (timeout after 30 minutes)
+          aws cloudformation wait stack-delete-complete \
+            --stack-name mcp-gateway \
+            --region us-east-1 || {
+            echo "❌ **Stack deletion failed or timed out**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Please check the CloudFormation console for more details:" >> $GITHUB_STEP_SUMMARY
+            echo "https://console.aws.amazon.com/cloudformation/home?region=us-east-1" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          
+          echo "✅ **Stack deleted successfully!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The \`mcp-gateway\` CloudFormation stack has been completely removed from us-east-1." >> $GITHUB_STEP_SUMMARY
